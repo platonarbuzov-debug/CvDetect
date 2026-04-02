@@ -14,6 +14,7 @@ import os
 import random
 import sys
 import time
+import shutil
 from copy import deepcopy
 from pathlib import Path
 
@@ -67,6 +68,9 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
     w = save_dir / 'weights'  # weights dir
     w.mkdir(parents=True, exist_ok=True)  # make dir
     last, best = w / 'last.pt', w / 'best.pt'
+    best_root = save_dir.parent / 'best_weights'
+    best_root.mkdir(parents=True, exist_ok=True)
+    best_separate = best_root / f'{save_dir.name}_best.pt'
 
     # Hyperparameters
     if isinstance(hyp, str):
@@ -381,6 +385,8 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                 torch.save(ckpt, last)
                 if best_fitness == fi:
                     torch.save(ckpt, best)
+                    shutil.copy2(best, best_separate)
+                    LOGGER.info(f'Saved best checkpoint to {best_separate}')
                 del ckpt
                 callbacks.on_model_save(last, epoch, final_epoch, best_fitness, fi)
 
@@ -416,7 +422,7 @@ def train(hyp,  # path/to/hyp.yaml or hyp dictionary
                                             save_json=True,
                                             plots=False)
             # Strip optimizers
-            for f in last, best:
+            for f in last, best, best_separate:
                 if f.exists():
                     strip_optimizer(f)  # strip optimizers
         callbacks.on_train_end(last, best, plots, epoch)
