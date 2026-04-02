@@ -1,0 +1,8 @@
+path: dataset-vehicles/detect  # dataset root dir
+train: images/train  # train images (relative to 'path')
+val: images/val  # val images (relative to 'path')
+test: images/test # test images (optional)
+
+# Classes
+nc: 13  # number of classes
+names: ['Car', 'Motorcycle', 'Truck', 'Bus', 'Bicycle', 'Airplane', 'Helicopter', 'Person', 'Bunker', 'Tank', 'IFV', 'MLRS', 'Cannon'] # class names

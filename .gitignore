@@ -1,0 +1,29 @@
+# environments
+.venv/
+venv/
+env/
+
+# python
+__pycache__/
+*.pyc
+.DS_Store
+
+# editor
+.vscode/
+.idea/
+
+# model weights
+*.pt
+*.pth
+
+# logs and artifacts
+runs/
+wandb/
+
+# datasets and generated files
+data/
+Dataset/
+dataset-vehicles/
+test_images/
+video_out/
+video_fly/
