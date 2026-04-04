@@ -1,5 +1,6 @@
-import os
+import json
 import shutil
+import time
 from pathlib import Path
 from typing import Dict, List
 
@@ -7,116 +8,152 @@ from PIL import Image
 from icrawler.builtin import GoogleImageCrawler, BingImageCrawler
 from imagededup.methods import PHash
 
-
 # =========================
 # CONFIG
 # =========================
-
 BASE_DIR = Path("dataset-vehicles")
-RAW_DIR = BASE_DIR / "raw_downloads"
+RUN_ID = time.strftime("%Y%m%d_%H%M%S")
+
+RAW_DIR = BASE_DIR / "raw_downloads" / f"topup_{RUN_ID}"
 FINAL_DIR = BASE_DIR / "images" / "train"
+REPORTS_DIR = BASE_DIR / "reports"
 
-# Сколько качать на каждый запрос из каждого источника
-PER_QUERY_GOOGLE = 250
-PER_QUERY_BING = 250
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
-# Потоки: можно увеличить, если интернет и машина тянут
+# Цель: добрать примерно 2-3k изображений суммарно
+TARGET_EXTRA_PER_CLASS: Dict[str, int] = {
+    "Car": 250,
+    "Motorcycle": 180,
+    "Truck": 220,
+    "Bus": 180,
+    "Bicycle": 180,
+    "Airplane": 180,
+    "Helicopter": 160,
+    "Person": 320,
+    "Bunker": 140,
+    "Tank": 240,
+    "IFV": 200,
+    "MLRS": 140,
+    "Cannon": 170,
+}
+
+PER_QUERY_GOOGLE = 120
+PER_QUERY_BING = 120
+
 CRAWLER_KWARGS = dict(
     feeder_threads=2,
     parser_threads=4,
     downloader_threads=8,
 )
 
-# Минимальный размер картинки, чтобы отсечь совсем мусор
 MIN_WIDTH = 320
 MIN_HEIGHT = 240
-
-# Порог дедупликации: меньше -> агрессивнее
 PHASH_MAX_DISTANCE = 8
-
-
-# =========================
-# CLASS QUERIES
-# =========================
 
 CLASS_QUERIES: Dict[str, List[str]] = {
     "Car": [
         "car street photo",
         "sedan road photo",
+        "hatchback city street photo",
         "car traffic real photo",
-        "vehicle road real world"
+        "parked car street real photo",
+        "vehicle road real world",
     ],
     "Motorcycle": [
         "motorcycle street photo",
         "motorbike road photo",
         "motorcycle real world",
-        "bike rider street photo"
+        "bike rider street photo",
+        "urban motorcycle photo",
+        "parked motorcycle street",
     ],
     "Truck": [
         "cargo truck road photo",
         "lorry highway photo",
         "delivery truck real photo",
-        "freight truck street"
+        "freight truck street",
+        "box truck city photo",
+        "semi truck road real photo",
     ],
     "Bus": [
         "city bus street photo",
         "public bus road photo",
         "coach bus real photo",
-        "bus traffic photo"
+        "bus traffic photo",
+        "urban bus stop photo",
+        "passenger bus road photo",
     ],
     "Bicycle": [
         "bicycle road photo",
         "bike street photo",
         "cyclist road real photo",
-        "bicycle urban photo"
+        "bicycle urban photo",
+        "parked bicycle street",
+        "city bicycle real world",
     ],
     "Airplane": [
         "military airplane photo",
         "fighter jet photo",
         "aircraft runway photo",
-        "military aircraft real photo"
+        "military aircraft real photo",
+        "warplane landing photo",
+        "combat aircraft airfield photo",
     ],
     "Helicopter": [
         "military helicopter photo",
         "helicopter landing photo",
         "combat helicopter real photo",
-        "helicopter airborne photo"
+        "helicopter airborne photo",
+        "military helicopter runway photo",
+        "helicopter tarmac photo",
     ],
     "Person": [
         "person walking street photo",
         "human full body outdoor photo",
         "person standing real photo",
-        "people outdoor real world"
+        "people outdoor real world",
+        "pedestrian street full body photo",
+        "single person outdoor photo",
     ],
     "Bunker": [
         "military bunker photo",
         "fortification bunker real photo",
         "defensive position bunker photo",
-        "concrete bunker military photo"
+        "concrete bunker military photo",
+        "pillbox bunker exterior photo",
+        "field bunker military position",
     ],
     "Tank": [
         "military tank photo",
         "battle tank real photo",
         "tank field photo",
-        "armored tank real world"
+        "armored tank real world",
+        "tank driving military photo",
+        "main battle tank real photo",
     ],
     "IFV": [
         "infantry fighting vehicle photo",
         "ifv military vehicle photo",
         "armored fighting vehicle real photo",
-        "bmp military vehicle photo"
+        "bmp military vehicle photo",
+        "tracked ifv real photo",
+        "combat vehicle ifv photo",
     ],
     "MLRS": [
         "multiple launch rocket system photo",
         "mlrs military vehicle photo",
         "rocket artillery launcher photo",
-        "grad smerch himars launcher photo"
+        "grad smerch himars launcher photo",
+        "rocket launcher truck military photo",
+        "mlrs field photo",
     ],
     "Cannon": [
         "artillery cannon photo",
         "howitzer gun photo",
         "field artillery real photo",
-        "towed artillery cannon photo"
+        "towed artillery cannon photo",
+        "artillery piece outdoor photo",
+        "howitzer military position photo",
     ],
 }
 
@@ -124,40 +161,20 @@ CLASS_QUERIES: Dict[str, List[str]] = {
 # =========================
 # HELPERS
 # =========================
-
 def ensure_dirs() -> None:
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     FINAL_DIR.mkdir(parents=True, exist_ok=True)
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     for cls in CLASS_QUERIES:
         (RAW_DIR / cls).mkdir(parents=True, exist_ok=True)
         (FINAL_DIR / cls).mkdir(parents=True, exist_ok=True)
 
 
-def crawl_google(class_name: str, query: str, out_dir: Path) -> None:
-    crawler = GoogleImageCrawler(
-        storage={"root_dir": str(out_dir)},
-        **CRAWLER_KWARGS,
-    )
-    filters = dict(size="large", type="photo")
-    crawler.crawl(
-        keyword=query,
-        filters=filters,
-        max_num=PER_QUERY_GOOGLE,
-        overwrite=False,
-    )
-
-
-def crawl_bing(class_name: str, query: str, out_dir: Path) -> None:
-    crawler = BingImageCrawler(
-        storage={"root_dir": str(out_dir)},
-        **CRAWLER_KWARGS,
-    )
-    filters = dict(size="large", type="photo", layout="wide")
-    crawler.crawl(
-        keyword=query,
-        filters=filters,
-        max_num=PER_QUERY_BING,
-        overwrite=False,
+def count_images(folder: Path) -> int:
+    return sum(
+        1
+        for p in folder.rglob("*")
+        if p.is_file() and p.suffix.lower() in IMAGE_EXTS
     )
 
 
@@ -175,56 +192,72 @@ def is_valid_image(path: Path) -> bool:
 def remove_invalid_images(folder: Path) -> int:
     removed = 0
     for path in folder.rglob("*"):
-        if path.is_file():
-            if path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
-                try:
-                    path.unlink()
-                    removed += 1
-                except Exception:
-                    pass
-                continue
-
-            if not is_valid_image(path):
-                try:
-                    path.unlink()
-                    removed += 1
-                except Exception:
-                    pass
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in IMAGE_EXTS:
+            try:
+                path.unlink()
+                removed += 1
+            except Exception:
+                pass
+            continue
+        if not is_valid_image(path):
+            try:
+                path.unlink()
+                removed += 1
+            except Exception:
+                pass
     return removed
 
 
-def flatten_class_folder(raw_class_dir: Path, final_class_dir: Path) -> int:
-    """
-    Собирает все картинки класса из вложенных папок в одну итоговую папку.
-    """
-    moved = 0
-    idx = 0
-    for path in raw_class_dir.rglob("*"):
+def next_index_for_class(final_class_dir: Path, class_name: str) -> int:
+    prefix = f"{class_name.lower()}_"
+    max_idx = -1
+    for p in final_class_dir.iterdir():
+        if not p.is_file():
+            continue
+        stem = p.stem.lower()
+        if stem.startswith(prefix):
+            tail = stem[len(prefix):]
+            if tail.isdigit():
+                max_idx = max(max_idx, int(tail))
+    return max_idx + 1
+
+
+def copy_images_from_query_dir(query_dir: Path, final_class_dir: Path, class_name: str) -> int:
+    copied = 0
+    idx = next_index_for_class(final_class_dir, class_name)
+
+    for path in sorted(query_dir.rglob("*")):
         if not path.is_file():
             continue
-        if path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}:
+        if path.suffix.lower() not in IMAGE_EXTS:
             continue
 
-        ext = ".jpg" if path.suffix.lower() not in {".jpg", ".jpeg", ".png"} else path.suffix.lower()
-        target = final_class_dir / f"{raw_class_dir.name}_{idx:06d}{ext}"
+        ext = path.suffix.lower()
+        if ext == ".jpeg":
+            ext = ".jpg"
+
+        target = final_class_dir / f"{class_name.lower()}_{idx:06d}{ext}"
         while target.exists():
             idx += 1
-            target = final_class_dir / f"{raw_class_dir.name}_{idx:06d}{ext}"
+            target = final_class_dir / f"{class_name.lower()}_{idx:06d}{ext}"
 
         try:
             shutil.copy2(path, target)
-            moved += 1
+            copied += 1
             idx += 1
         except Exception:
             pass
-    return moved
+
+    return copied
 
 
 def deduplicate_folder(folder: Path, max_distance_threshold: int = PHASH_MAX_DISTANCE) -> int:
-    """
-    Удаляет визуальные дубликаты в рамках одной папки класса.
-    Оставляет первый файл, найденные дубли удаляет.
-    """
+    images = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS]
+    if len(images) < 2:
+        return 0
+
     phasher = PHash()
     encodings = phasher.encode_images(image_dir=str(folder))
     duplicates = phasher.find_duplicates(
@@ -247,73 +280,132 @@ def deduplicate_folder(folder: Path, max_distance_threshold: int = PHASH_MAX_DIS
                 removed += 1
             except Exception:
                 pass
+
     return removed
 
 
-def count_images(folder: Path) -> int:
-    return sum(
-        1 for p in folder.rglob("*")
-        if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+def crawl_google(query: str, out_dir: Path) -> None:
+    crawler = GoogleImageCrawler(
+        storage={"root_dir": str(out_dir)},
+        **CRAWLER_KWARGS,
     )
+    filters = dict(size="large", type="photo")
+    crawler.crawl(keyword=query, filters=filters, max_num=PER_QUERY_GOOGLE, overwrite=False)
+
+
+def crawl_bing(query: str, out_dir: Path) -> None:
+    crawler = BingImageCrawler(
+        storage={"root_dir": str(out_dir)},
+        **CRAWLER_KWARGS,
+    )
+    filters = dict(size="large", type="photo", layout="wide")
+    crawler.crawl(keyword=query, filters=filters, max_num=PER_QUERY_BING, overwrite=False)
 
 
 # =========================
 # MAIN
 # =========================
-
 def main() -> None:
     ensure_dirs()
 
-    print("\n=== STEP 1: DOWNLOAD ===")
+    summary = {
+        "run_id": RUN_ID,
+        "raw_dir": str(RAW_DIR),
+        "final_dir": str(FINAL_DIR),
+        "classes": {},
+    }
+
+    print(f"\n=== TOP-UP RUN {RUN_ID} ===")
+    print(f"Raw dir:   {RAW_DIR}")
+    print(f"Final dir: {FINAL_DIR}")
+
     for class_name, queries in CLASS_QUERIES.items():
-        class_raw_dir = RAW_DIR / class_name
-        class_raw_dir.mkdir(parents=True, exist_ok=True)
+        final_class_dir = FINAL_DIR / class_name
+        raw_class_dir = RAW_DIR / class_name
+
+        before_count = count_images(final_class_dir)
+        target_count = before_count + TARGET_EXTRA_PER_CLASS[class_name]
+
+        print(f"\n[{class_name}] current={before_count} | target={target_count}")
+
+        class_info = {
+            "before_count": before_count,
+            "target_count": target_count,
+            "invalid_removed": 0,
+            "copied_before_dedup": 0,
+            "duplicates_removed": 0,
+            "after_count": before_count,
+        }
 
         for i, query in enumerate(queries, start=1):
-            google_dir = class_raw_dir / f"google_q{i}"
-            bing_dir = class_raw_dir / f"bing_q{i}"
+            current_count = count_images(final_class_dir)
+            if current_count >= target_count:
+                print(f"[{class_name}] target reached early: {current_count}/{target_count}")
+                break
+
+            google_dir = raw_class_dir / f"google_q{i}"
+            bing_dir = raw_class_dir / f"bing_q{i}"
             google_dir.mkdir(parents=True, exist_ok=True)
             bing_dir.mkdir(parents=True, exist_ok=True)
 
             print(f"[{class_name}] Google: {query}")
             try:
-                crawl_google(class_name, query, google_dir)
+                crawl_google(query, google_dir)
             except Exception as e:
                 print(f"  Google error: {e}")
 
             print(f"[{class_name}] Bing:   {query}")
             try:
-                crawl_bing(class_name, query, bing_dir)
+                crawl_bing(query, bing_dir)
             except Exception as e:
                 print(f"  Bing error: {e}")
 
-    print("\n=== STEP 2: REMOVE INVALID FILES ===")
-    total_removed_invalid = 0
-    for class_name in CLASS_QUERIES:
-        removed = remove_invalid_images(RAW_DIR / class_name)
-        total_removed_invalid += removed
-        print(f"[{class_name}] removed invalid/non-image files: {removed}")
+            removed_google = remove_invalid_images(google_dir)
+            removed_bing = remove_invalid_images(bing_dir)
+            class_info["invalid_removed"] += removed_google + removed_bing
 
-    print("\n=== STEP 3: FLATTEN INTO FINAL CLASS FOLDERS ===")
-    for class_name in CLASS_QUERIES:
-        moved = flatten_class_folder(RAW_DIR / class_name, FINAL_DIR / class_name)
-        print(f"[{class_name}] collected into final folder: {moved}")
+            copied_google = copy_images_from_query_dir(google_dir, final_class_dir, class_name)
+            copied_bing = copy_images_from_query_dir(bing_dir, final_class_dir, class_name)
+            class_info["copied_before_dedup"] += copied_google + copied_bing
 
-    print("\n=== STEP 4: DEDUPLICATE PER CLASS ===")
-    for class_name in CLASS_QUERIES:
-        class_final_dir = FINAL_DIR / class_name
-        before = count_images(class_final_dir)
-        removed = deduplicate_folder(class_final_dir)
-        after = count_images(class_final_dir)
-        print(f"[{class_name}] before={before}, removed_duplicates={removed}, after={after}")
+            removed_dups = deduplicate_folder(final_class_dir)
+            class_info["duplicates_removed"] += removed_dups
 
-    print("\n=== DONE ===")
-    print(f"Raw downloads: {RAW_DIR}")
-    print(f"Final dataset: {FINAL_DIR}")
-    print("\nCounts per class:")
-    for class_name in CLASS_QUERIES:
-        n = count_images(FINAL_DIR / class_name)
-        print(f"  {class_name}: {n}")
+            after_query_count = count_images(final_class_dir)
+            print(
+                f"[{class_name}] after query {i}: count={after_query_count} "
+                f"(copied={copied_google + copied_bing}, invalid_removed={removed_google + removed_bing}, "
+                f"dedup_removed={removed_dups})"
+            )
+
+        final_count = count_images(final_class_dir)
+        class_info["after_count"] = final_count
+        class_info["added_total"] = final_count - before_count
+        summary["classes"][class_name] = class_info
+
+        print(
+            f"[{class_name}] DONE | before={before_count} after={final_count} "
+            f"added={class_info['added_total']}"
+        )
+
+    summary_path = REPORTS_DIR / f"topup_summary_{RUN_ID}.json"
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
+    print("\n=== FINAL COUNTS ===")
+    total_before = 0
+    total_after = 0
+    total_added = 0
+    for class_name, info in summary["classes"].items():
+        total_before += info["before_count"]
+        total_after += info["after_count"]
+        total_added += info["added_total"]
+        print(f"{class_name}: before={info['before_count']} after={info['after_count']} added={info['added_total']}")
+
+    print(f"\nTOTAL BEFORE: {total_before}")
+    print(f"TOTAL AFTER:  {total_after}")
+    print(f"TOTAL ADDED:  {total_added}")
+    print(f"Summary JSON: {summary_path}")
 
 
 if __name__ == "__main__":
